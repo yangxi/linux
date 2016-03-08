@@ -200,6 +200,8 @@ exit_idle:
 }
 
 DEFINE_PER_CPU(bool, cpu_dead_idle);
+DECLARE_PER_CPU(unsigned long, shim_sleep_flag);
+DECLARE_PER_CPU(unsigned long*, shim_wakeup_ptr);
 
 /*
  * Generic idle loop implementation
@@ -222,6 +224,8 @@ static void cpu_idle_loop(void)
 		tick_nohz_idle_enter();
 
 		while (!need_resched()) {
+		  unsigned long * shim_target_flag = __this_cpu_read(shim_wakeup_ptr);
+		  *shim_target_flag  = 0xdead;
 			check_pgt_cache();
 			rmb();
 
@@ -280,6 +284,8 @@ static void cpu_idle_loop(void)
 
 void cpu_startup_entry(enum cpuhp_state state)
 {
+  int my_cpu,target_cpu;
+  unsigned long *shim_target_wait;
 	/*
 	 * This #ifdef needs to die, but it's too late in the cycle to
 	 * make this generic (arm and sh have never invoked the canary
@@ -295,6 +301,12 @@ void cpu_startup_entry(enum cpuhp_state state)
 	 */
 	boot_init_stack_canary();
 #endif
+	my_cpu = smp_processor_id();
+	target_cpu = my_cpu ^ 0x8;
+	shim_target_wait = per_cpu_ptr(&shim_sleep_flag, target_cpu);
+	__this_cpu_write(shim_wakeup_ptr, shim_target_wait);
+	printk(KERN_DEBUG "SHIM:idle starts on cpu %d, neighbour cpu %d, waits on %p, neighbour on %p\n", my_cpu, target_cpu, &shim_wakeup_ptr, shim_target_wait);
+
 	arch_cpu_idle_prepare();
 	cpu_idle_loop();
 }

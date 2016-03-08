@@ -52,6 +52,8 @@
 asmlinkage extern void ret_from_fork(void);
 
 __visible DEFINE_PER_CPU(unsigned long, rsp_scratch);
+__visible DEFINE_PER_CPU(int, shim_curr_syscall);
+EXPORT_PER_CPU_SYMBOL(shim_curr_syscall);
 
 /* Prints also some state that isn't saved in the pt_regs */
 void __show_regs(struct pt_regs *regs, int all)

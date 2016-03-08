@@ -2759,9 +2759,15 @@ unlock:
 
 DEFINE_PER_CPU(struct kernel_stat, kstat);
 DEFINE_PER_CPU(struct kernel_cpustat, kernel_cpustat);
+DEFINE_PER_CPU(unsigned long, shim_curr_task);
+DEFINE_PER_CPU(unsigned long, shim_sleep_flag);
+DEFINE_PER_CPU(unsigned long *, shim_wakeup_ptr);
 
 EXPORT_PER_CPU_SYMBOL(kstat);
 EXPORT_PER_CPU_SYMBOL(kernel_cpustat);
+EXPORT_PER_CPU_SYMBOL(shim_curr_task);
+EXPORT_PER_CPU_SYMBOL(shim_sleep_flag);
+EXPORT_PER_CPU_SYMBOL(shim_wakeup_ptr);
 
 /*
  * Return accounted runtime for the task.
@@ -3015,6 +3021,9 @@ again:
 	BUG(); /* the idle class will always have a runnable task */
 }
 
+void (*switchCallBack)(struct task_struct *prev,struct task_struct *next) = NULL;
+EXPORT_SYMBOL(switchCallBack);
+
 /*
  * __schedule() is the main scheduler function.
  *
@@ -3118,7 +3127,9 @@ static void __sched __schedule(void)
 		rq->nr_switches++;
 		rq->curr = next;
 		++*switch_count;
-
+		//		if (switchCallBack)
+		//		  switchCallBack(prev,next);
+	        __this_cpu_write(shim_curr_task, (unsigned long)task_pid_nr(next) | ((unsigned long)task_tgid_nr(next)<<32));
 		rq = context_switch(rq, prev, next); /* unlocks the rq */
 		cpu = cpu_of(rq);
 	} else {

@@ -182,8 +182,10 @@ entry_SYSCALL_64_fastpath:
 #endif
 	ja	1f				/* return -ENOSYS (already in pt_regs->ax) */
 	movq	%r10, %rcx
+	movl %eax,PER_CPU_VAR(shim_curr_syscall)
 	call	*sys_call_table(, %rax, 8)
 	movq	%rax, RAX(%rsp)
+	movl $-1,PER_CPU_VAR(shim_curr_syscall)
 1:
 /*
  * Syscall return path ending with SYSRET (fast path).
