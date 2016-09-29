@@ -4536,7 +4536,6 @@ static int workqueue_cpu_up_callback(struct notifier_block *nfb,
 	return NOTIFY_OK;
 }
 
-
 /*
  * Workqueues should be brought down after normal priority CPU notifiers.
  * This will be registered as low priority CPU notifier.

@@ -284,8 +284,8 @@ static void cpu_idle_loop(void)
 
 void cpu_startup_entry(enum cpuhp_state state)
 {
-  int my_cpu,target_cpu;
-  unsigned long *shim_target_wait;
+	int my_cpu,target_cpu,nr_cpu;
+	unsigned long *shim_target_wait;
 	/*
 	 * This #ifdef needs to die, but it's too late in the cycle to
 	 * make this generic (arm and sh have never invoked the canary
@@ -302,7 +302,12 @@ void cpu_startup_entry(enum cpuhp_state state)
 	boot_init_stack_canary();
 #endif
 	my_cpu = smp_processor_id();
-	target_cpu = my_cpu ^ 0x8;
+	nr_cpu = num_possible_cpus();
+	if (my_cpu < nr_cpu/2)
+		target_cpu = my_cpu + nr_cpu/2;
+	else
+		target_cpu = my_cpu - nr_cpu/2;
+
 	shim_target_wait = per_cpu_ptr(&shim_sleep_flag, target_cpu);
 	__this_cpu_write(shim_wakeup_ptr, shim_target_wait);
 	printk(KERN_DEBUG "SHIM:idle starts on cpu %d, neighbour cpu %d, waits on %p, neighbour on %p\n", my_cpu, target_cpu, &shim_wakeup_ptr, shim_target_wait);
