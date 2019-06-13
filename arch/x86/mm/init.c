@@ -716,7 +716,7 @@ int devmem_is_allowed(unsigned long pagenr)
 		if (pagenr < 256)
 			return 2;
 
-		return 0;
+		return 1;
 	}
 
 	/*
@@ -728,7 +728,7 @@ int devmem_is_allowed(unsigned long pagenr)
 		if (pagenr < 256)
 			return 1;
 
-		return 0;
+		return 1;
 	}
 
 	return 1;

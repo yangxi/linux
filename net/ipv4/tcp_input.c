@@ -79,8 +79,25 @@
 #include <trace/events/tcp.h>
 #include <linux/static_key.h>
 
-int sysctl_tcp_max_orphans __read_mostly = NR_FILE;
 
+#include <asm/msr.h>
+#include <asm/current.h>
+
+#define SHIM_TCP_RECV_TYPE (10)
+DECLARE_PER_CPU(unsigned long*, shim_signal);
+struct shim_tcp_recv_signal
+{
+    unsigned long timestamp;
+    unsigned int type;
+    unsigned int seq;
+    int tid;
+    int pid;
+    u64 sockptr;
+    u64 skuptr;
+    int reason;
+};
+
+int sysctl_tcp_max_orphans __read_mostly = NR_FILE;
 #define FLAG_DATA		0x01 /* Incoming frame contained data.		*/
 #define FLAG_WIN_UPDATE		0x02 /* Incoming ACK was a window update.	*/
 #define FLAG_DATA_ACKED		0x04 /* This ACK acknowledged new data.		*/
@@ -682,6 +699,19 @@ new_measure:
  */
 static void tcp_event_data_recv(struct sock *sk, struct sk_buff *skb)
 {
+    struct shim_tcp_recv_signal *s;
+    s =(struct shim_tcp_recv_signal *) __this_cpu_read(shim_signal);
+    if ( s!= NULL)
+    {
+	s->type = SHIM_TCP_RECV_TYPE;
+	s->seq += 1;
+	s->sockptr = (u64)sk;
+	s->skuptr = (u64)skb;
+	s->tid = (int)task_pid_nr(current);
+	s->pid = (int)task_tgid_nr(current);
+	s->reason = 0;
+	s->timestamp = rdtsc();
+    }
 	struct tcp_sock *tp = tcp_sk(sk);
 	struct inet_connection_sock *icsk = inet_csk(sk);
 	u32 now;

@@ -14,6 +14,8 @@
 #include <asm/switch_to.h>
 #include <asm/tlb.h>
 
+#include <asm/msr.h>
+
 #include "../workqueue_internal.h"
 #include "../smpboot.h"
 
@@ -1954,6 +1956,37 @@ static void ttwu_queue(struct task_struct *p, int cpu, int wake_flags)
  *
  */
 
+DEFINE_PER_CPU(unsigned long *, shim_signal);
+
+#define KERNEL_SCHEDULE_SIGNAL (1)
+#define KERNEL_WAKEUP_SIGNAL (3)
+
+struct shim_wakeup_signal
+{
+    unsigned long timestamp;
+    unsigned int type;
+    unsigned int seq;
+    int tid;
+    int pid;
+    int to_tid;
+    int to_tgid;
+};
+
+struct shim_schedule_signal
+{
+    unsigned long timestamp;
+    unsigned int type;
+    unsigned int seq;
+    int tid;
+    int pid;
+    int to_tid;
+    int to_tgid;
+    int to_wakee_tid;
+    int to_wakee_tgid;
+    u64 to_wakee_stamp;
+};
+EXPORT_PER_CPU_SYMBOL(shim_signal);
+
 /**
  * try_to_wake_up - wake up a thread
  * @p: the thread to be awakened
@@ -1975,6 +2008,7 @@ try_to_wake_up(struct task_struct *p, unsigned int state, int wake_flags)
 {
 	unsigned long flags;
 	int cpu, success = 0;
+	u64 stamp;
 
 	/*
 	 * If we are going to wake up a thread waiting for CONDITION we
@@ -1987,6 +2021,21 @@ try_to_wake_up(struct task_struct *p, unsigned int state, int wake_flags)
 	if (!(p->state & state))
 		goto out;
 
+	struct shim_wakeup_signal * t =(struct shim_wakeup_signal *) __this_cpu_read(shim_signal);
+	if (t != NULL)
+	{
+	    stamp = rdtsc();
+	    t->type = KERNEL_WAKEUP_SIGNAL;
+	    t->seq += 1;
+	    t->to_tid = (int)task_pid_nr(p);
+	    t->to_tgid = (int)task_tgid_nr(p);
+	    t->tid = (int)task_pid_nr(current);
+	    p->wakee_tid = t->tid;
+	    t->pid = (int)task_tgid_nr(current);
+	    p->wakee_gid = t->pid;
+	    p->wakee_stamp = stamp;
+	    t->timestamp = stamp;
+	}
 	trace_sched_waking(p);
 
 	/* We're going to change ->state: */
@@ -2994,9 +3043,20 @@ unlock:
 
 DEFINE_PER_CPU(struct kernel_stat, kstat);
 DEFINE_PER_CPU(struct kernel_cpustat, kernel_cpustat);
+DEFINE_PER_CPU(unsigned int, shim_curr_flag);
+DEFINE_PER_CPU(unsigned long, shim_curr_task);
+DEFINE_PER_CPU(unsigned long, shim_sleep_flag);
+DEFINE_PER_CPU(unsigned long *, shim_wakeup_ptr);
 
 EXPORT_PER_CPU_SYMBOL(kstat);
 EXPORT_PER_CPU_SYMBOL(kernel_cpustat);
+EXPORT_PER_CPU_SYMBOL(shim_curr_flag);
+EXPORT_PER_CPU_SYMBOL(shim_curr_task);
+EXPORT_PER_CPU_SYMBOL(shim_sleep_flag);
+EXPORT_PER_CPU_SYMBOL(shim_wakeup_ptr);
+
+
+
 
 /*
  * The function fair_sched_class.update_curr accesses the struct curr
@@ -3494,6 +3554,32 @@ static void __sched notrace __schedule(bool preempt)
 		 *   is a RELEASE barrier),
 		 */
 		++*switch_count;
+		struct shim_schedule_signal * t =(struct shim_schedule_signal *) __this_cpu_read(shim_signal);
+		if (t != NULL)
+		{
+		    t->type = KERNEL_SCHEDULE_SIGNAL;
+		    t->seq += 1;
+		    t->to_tid = (int)task_pid_nr(next);
+		    t->to_tgid = (int)task_tgid_nr(next);
+		    t->to_wakee_tid = next->wakee_tid;
+		    t->to_wakee_tgid = next->wakee_gid;
+		    t->to_wakee_stamp = next->wakee_stamp;
+		    t->tid = (int)task_pid_nr(prev);		    
+		    t->pid = (int)task_tgid_nr(prev);
+		    t->timestamp = rdtsc();
+		}
+		__this_cpu_write(shim_curr_task, (unsigned long)task_pid_nr(next) | ((unsigned long)task_tgid_nr(next)<<32));
+
+//		if (next->policy == SCHED_IDLE || task_tgid_nr(next) == 0) {
+		if (task_tgid_nr(next) != 0) {
+		  __this_cpu_write(shim_curr_flag, 1);
+		  //wakeup the paired CPU
+		  unsigned long * shim_target_flag = __this_cpu_read(shim_wakeup_ptr);
+		  if (shim_target_flag)
+		    *shim_target_flag  = 0xdead;
+		} else {
+		  __this_cpu_write(shim_curr_flag, 0);
+		}
 
 		trace_sched_switch(preempt, prev, next);
 
@@ -3806,7 +3892,10 @@ void rt_mutex_setprio(struct task_struct *p, struct task_struct *pi_task)
 		goto out_unlock;
 
 	/*
-	 * Idle task boosting is a nono in general. There is one
+shell
+cd cus
+grep -r 'global-set-key' .
+	 * Idle task boo(meta g)ng is a nono in M-g There is one
 	 * exception, when PREEMPT_RT and NOHZ is active:
 	 *
 	 * The idle task calls get_next_timer_interrupt() and holds

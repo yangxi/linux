@@ -146,6 +146,7 @@
 #include <linux/sctp.h>
 #include <net/udp_tunnel.h>
 #include <linux/net_namespace.h>
+#include <asm/msr.h>
 
 #include "net-sysfs.h"
 
@@ -165,6 +166,8 @@ static int netif_rx_internal(struct sk_buff *skb);
 static int call_netdevice_notifiers_info(unsigned long val,
 					 struct netdev_notifier_info *info);
 static struct napi_struct *napi_by_id(unsigned int napi_id);
+
+
 
 /*
  * The @dev_base_head list is protected by @dev_base_lock and the rtnl
@@ -4261,7 +4264,7 @@ EXPORT_SYMBOL(netif_rx_ni);
 
 static __latent_entropy void net_tx_action(struct softirq_action *h)
 {
-	struct softnet_data *sd = this_cpu_ptr(&softnet_data);
+    struct softnet_data *sd = this_cpu_ptr(&softnet_data);
 
 	if (sd->completion_queue) {
 		struct sk_buff *clist;
@@ -5813,6 +5816,7 @@ out_unlock:
 
 static __latent_entropy void net_rx_action(struct softirq_action *h)
 {
+//        unsigned long startAction = rdtsc();
 	struct softnet_data *sd = this_cpu_ptr(&softnet_data);
 	unsigned long time_limit = jiffies +
 		usecs_to_jiffies(netdev_budget_usecs);
@@ -5858,6 +5862,7 @@ static __latent_entropy void net_rx_action(struct softirq_action *h)
 	net_rps_action_and_irq_enable(sd);
 out:
 	__kfree_skb_flush();
+//	unsigned long endAction = rdtsc();
 }
 
 struct netdev_adjacent {

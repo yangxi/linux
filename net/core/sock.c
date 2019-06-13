@@ -142,8 +142,27 @@
 #include <net/tcp.h>
 #include <net/busy_poll.h>
 
+
+#include <asm/msr.h>
+#include <asm/current.h>
+
 static DEFINE_MUTEX(proto_list_mutex);
 static LIST_HEAD(proto_list);
+
+
+/* #define SHIM_SOCK_SIGNAL_TYPE (8) */
+/* DECLARE_PER_CPU(unsigned long*, shim_signal); */
+/* struct shim_sock_signal */
+/* { */
+/*     unsigned long timestamp; */
+/*     int type; */
+/*     int size; */
+/*     int tid; */
+/*     int tgid; */
+/*     u64 sockptr; */
+/*     int sockbufsize; */
+/*     int datasize; */
+/* }; */
 
 static void sock_inuse_add(struct net *net, int val);
 
@@ -447,6 +466,19 @@ int __sock_queue_rcv_skb(struct sock *sk, struct sk_buff *skb)
 {
 	unsigned long flags;
 	struct sk_buff_head *list = &sk->sk_receive_queue;
+       	/* struct shim_sock_signal *s =(struct shim_sock_signal *) __this_cpu_read(shim_signal); */
+	/* if (s != NULL) */
+	/* { */
+	/*     // fill the shim_softirq_signal */
+	/*     s->type = SHIM_SOCK_SIGNAL_TYPE; */
+	/*     s->size = sizeof(struct shim_sock_signal); */
+	/*     s->sockptr = (u64)sk; */
+	/*     s->sockbufsize = sk->sk_backlog.len + atomic_read(&sk->sk_rmem_alloc); */
+	/*     s->datasize = skb->len; */
+	/*     s->tid = (int)task_pid_nr(current); */
+	/*     s->tgid = (int)task_tgid_nr(current); */
+	/*     s->timestamp = rdtsc(); */
+	/* } */
 
 	if (atomic_read(&sk->sk_rmem_alloc) >= sk->sk_rcvbuf) {
 		atomic_inc(&sk->sk_drops);
