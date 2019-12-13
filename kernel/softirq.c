@@ -26,6 +26,9 @@
 #include <linux/smpboot.h>
 #include <linux/tick.h>
 #include <linux/irq.h>
+//#include <linux/sched/clock.h>
+#include <asm/msr.h>
+#include <asm/current.h>
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/irq.h>
@@ -52,6 +55,22 @@
 DEFINE_PER_CPU_ALIGNED(irq_cpustat_t, irq_stat);
 EXPORT_PER_CPU_SYMBOL(irq_stat);
 #endif
+
+DECLARE_PER_CPU(unsigned long*, shim_signal);
+
+#define KERNEL_SOFTIRQ_SIGNAL (2)
+
+struct shim_softirq_signal
+{
+    unsigned long timestamp;
+    unsigned int type;
+    unsigned int seq;
+    int tid;
+    int pid;
+    int vector;
+    unsigned long latency;    
+};
+
 
 static struct softirq_action softirq_vec[NR_SOFTIRQS] __cacheline_aligned_in_smp;
 
@@ -280,6 +299,9 @@ restart:
 	while ((softirq_bit = ffs(pending))) {
 		unsigned int vec_nr;
 		int prev_count;
+		unsigned long startAction;
+		unsigned long endAction;
+		struct shim_softirq_signal * s ;
 
 		h += softirq_bit - 1;
 
@@ -289,7 +311,24 @@ restart:
 		kstat_incr_softirqs_this_cpu(vec_nr);
 
 		trace_softirq_entry(vec_nr);
+
+		startAction = rdtsc();
 		h->action(h);
+		endAction = rdtsc();	       
+		s =(struct shim_softirq_signal *) __this_cpu_read(shim_signal);
+		if (s != NULL)
+		{
+		    // fill the shim_softirq_signal
+		    s->type = KERNEL_SOFTIRQ_SIGNAL;
+		    s->vector = vec_nr;
+		    s->seq += 1;
+		    s->latency = endAction - startAction;
+		    s->tid = (int)task_pid_nr(current);
+		    s->pid = (int)task_tgid_nr(current);
+		    s->timestamp = endAction;
+		}
+		
+		
 		trace_softirq_exit(vec_nr);
 		if (unlikely(prev_count != preempt_count())) {
 			pr_err("huh, entered softirq %u %s %p with preempt_count %08x, exited with %08x?\n",

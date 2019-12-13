@@ -25,6 +25,9 @@
 #include <asm/vm86.h>			/* struct vm86			*/
 #include <asm/mmu_context.h>		/* vma_pkey()			*/
 
+#include <asm/msr.h>
+#include <asm/current.h>
+
 #define CREATE_TRACE_POINTS
 #include <asm/trace/exceptions.h>
 
@@ -1451,6 +1454,19 @@ trace_page_fault_entries(unsigned long address, struct pt_regs *regs,
 		trace_page_fault_kernel(address, regs, error_code);
 }
 
+DECLARE_PER_CPU(unsigned long*, shim_signal);
+#define KERNEL_PAGEFAULT_TYPE (12)
+struct shim_pagefault_signal
+{
+    unsigned long timestamp;
+    unsigned int type;
+    unsigned int seq;
+    int tid;
+    int pid;
+    int latency;
+    u64 addr; 
+};
+
 /*
  * We must have this function blacklisted from kprobes, tagged with notrace
  * and call read_cr2() before calling anything else. To avoid calling any
@@ -1463,12 +1479,29 @@ do_page_fault(struct pt_regs *regs, unsigned long error_code)
 {
 	unsigned long address = read_cr2(); /* Get the faulting address */
 	enum ctx_state prev_state;
+	u64 start, end;
+	struct shim_pagefault_signal *s;
+	
 
 	prev_state = exception_enter();
 	if (trace_pagefault_enabled())
 		trace_page_fault_entries(address, regs, error_code);
-
+	start = rdtsc();
 	__do_page_fault(regs, error_code, address);
+	end = rdtsc();
+	s = (struct shim_pagefault_signal *) __this_cpu_read(shim_signal);
+	if (s)
+	{
+	    // 100 bytes offset
+	    s = (struct shim_pagefault_signal *)((char *)s + 100);
+	    s->type = KERNEL_PAGEFAULT_TYPE;
+	    s->seq += 1;
+	    s->tid = (int)task_pid_nr(current);
+	    s->pid = (int)task_tgid_nr(current);
+	    s->latency = end - start;
+	    s->addr = address;
+	    s->timestamp = end;
+	}
 	exception_exit(prev_state);
 }
 NOKPROBE_SYMBOL(do_page_fault);

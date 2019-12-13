@@ -32,8 +32,26 @@
 #include <linux/uaccess.h>
 #include <asm/cpufeature.h>
 
+#include <asm/msr.h>
+#include <asm/current.h>
+
 #define CREATE_TRACE_POINTS
 #include <trace/events/syscalls.h>
+
+DECLARE_PER_CPU(unsigned long*, shim_signal);
+#define KERNEL_SYSCALL_TYPE (11)
+struct shim_syscall_signal
+{
+    unsigned long timestamp;
+    unsigned int type;
+    unsigned int seq;
+    int tid;
+    int pid;
+    int call;
+    unsigned long latency;
+};
+
+
 
 #ifdef CONFIG_CONTEXT_TRACKING
 /* Called on entry from user mode with IRQs off. */
@@ -272,6 +290,8 @@ __visible inline void syscall_return_slowpath(struct pt_regs *regs)
 __visible void do_syscall_64(unsigned long nr, struct pt_regs *regs)
 {
 	struct thread_info *ti;
+	u64 start,end;
+	struct shim_syscall_signal *s;
 
 	enter_from_user_mode();
 	local_irq_enable();
@@ -287,7 +307,22 @@ __visible void do_syscall_64(unsigned long nr, struct pt_regs *regs)
 	nr &= __SYSCALL_MASK;
 	if (likely(nr < NR_syscalls)) {
 		nr = array_index_nospec(nr, NR_syscalls);
+		start = rdtsc();
 		regs->ax = sys_call_table[nr](regs);
+		end = rdtsc();
+		s = (struct shim_syscall_signal *) (__this_cpu_read(shim_signal));
+		if (s)
+		{
+		    s = (struct shim_syscall_signal *)((char *)s + 100);
+		    s->type = KERNEL_SYSCALL_TYPE;
+		    s->seq += 1;
+		    s->call = nr;
+		    s->tid = (int)task_pid_nr(current);
+		    s->pid = (int)task_tgid_nr(current);
+		    s->latency = end - start;
+		    s->timestamp = end;
+		}
+		
 	}
 
 	syscall_return_slowpath(regs);

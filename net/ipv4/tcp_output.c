@@ -45,6 +45,23 @@
 
 #include <trace/events/tcp.h>
 
+#include <asm/msr.h>
+#include <asm/current.h>
+
+#define SHIM_TCP_XMIT_TYPE (9)
+DECLARE_PER_CPU(unsigned long*, shim_signal);
+struct shim_tcp_xmit_signal
+{
+    unsigned long timestamp;
+    unsigned int type;
+    unsigned int seq;
+    int tid;
+    int pid;
+    u64 sockptr;
+    u64 skuptr;
+    int reason;
+};
+
 static bool tcp_write_xmit(struct sock *sk, unsigned int mss_now, int nonagle,
 			   int push_one, gfp_t gfp);
 
@@ -2275,6 +2292,23 @@ void tcp_chrono_stop(struct sock *sk, const enum tcp_chrono type)
 		tcp_chrono_set(tp, TCP_CHRONO_BUSY);
 }
 
+static void generate_shim_tcp_xmit_signal(struct sock *sk, struct sk_buff *buff, int reason)
+{
+    struct shim_tcp_xmit_signal *s;
+    s =(struct shim_tcp_xmit_signal *) __this_cpu_read(shim_signal);
+	if ( s!= NULL)
+	{
+	    s->type = SHIM_TCP_XMIT_TYPE;
+	    s->seq += 1;
+	    s->sockptr = (u64)sk;
+	    s->skuptr = (u64)buff;
+	    s->tid = (int)task_pid_nr(current);
+	    s->pid = (int)task_tgid_nr(current);
+	    s->reason = reason;
+	    s->timestamp = rdtsc();
+	}
+}
+
 /* This routine writes packets to the network.  It advances the
  * send_head.  This happens as incoming acks open up the remote
  * window for us.
@@ -2299,7 +2333,7 @@ static bool tcp_write_xmit(struct sock *sk, unsigned int mss_now, int nonagle,
 	int result;
 	bool is_cwnd_limited = false, is_rwnd_limited = false;
 	u32 max_segs;
-
+	
 	sent_pkts = 0;
 
 	tcp_mstamp_refresh(tp);
@@ -2307,18 +2341,24 @@ static bool tcp_write_xmit(struct sock *sk, unsigned int mss_now, int nonagle,
 		/* Do MTU probing. */
 		result = tcp_mtu_probe(sk);
 		if (!result) {
-			return false;
-		} else if (result > 0) {
+		    generate_shim_tcp_xmit_signal(sk, NULL, 1);
+		    return false;
+		}else if (result > 0) {
 			sent_pkts = 1;
 		}
 	}
+
+
 
 	max_segs = tcp_tso_segs(sk, mss_now);
 	while ((skb = tcp_send_head(sk))) {
 		unsigned int limit;
 
 		if (tcp_pacing_check(sk))
+		{		    
+		    generate_shim_tcp_xmit_signal(sk, skb, 2);
 			break;
+		}
 
 		tso_segs = tcp_init_tso_segs(skb, mss_now);
 		BUG_ON(!tso_segs);
@@ -2326,6 +2366,7 @@ static bool tcp_write_xmit(struct sock *sk, unsigned int mss_now, int nonagle,
 		if (unlikely(tp->repair) && tp->repair_queue == TCP_SEND_QUEUE) {
 			/* "skb_mstamp" is used as a start point for the retransmit timer */
 			tcp_update_skb_after_send(tp, skb);
+			generate_shim_tcp_xmit_signal(sk, skb, 10);
 			goto repair; /* Skip network transmission */
 		}
 
@@ -2334,25 +2375,34 @@ static bool tcp_write_xmit(struct sock *sk, unsigned int mss_now, int nonagle,
 			if (push_one == 2)
 				/* Force out a loss probe pkt. */
 				cwnd_quota = 1;
-			else
-				break;
+			else {
+			    generate_shim_tcp_xmit_signal(sk, skb, 3);
+			    break;
+			}
 		}
 
 		if (unlikely(!tcp_snd_wnd_test(tp, skb, mss_now))) {
-			is_rwnd_limited = true;
-			break;
+			is_rwnd_limited = true;			
+			    generate_shim_tcp_xmit_signal(sk, skb, 4);
+			    break;			
 		}
 
 		if (tso_segs == 1) {
 			if (unlikely(!tcp_nagle_test(tp, skb, mss_now,
 						     (tcp_skb_is_last(sk, skb) ?
 						      nonagle : TCP_NAGLE_PUSH))))
+			{
+			    generate_shim_tcp_xmit_signal(sk, skb, 5);
 				break;
+			}
 		} else {
 			if (!push_one &&
 			    tcp_tso_should_defer(sk, skb, &is_cwnd_limited,
 						 max_segs))
+			{
+			    generate_shim_tcp_xmit_signal(sk, skb, 6);
 				break;
+			}
 		}
 
 		limit = mss_now;
@@ -2366,22 +2416,33 @@ static bool tcp_write_xmit(struct sock *sk, unsigned int mss_now, int nonagle,
 		if (skb->len > limit &&
 		    unlikely(tso_fragment(sk, TCP_FRAG_IN_WRITE_QUEUE,
 					  skb, limit, mss_now, gfp)))
+		{
+		    generate_shim_tcp_xmit_signal(sk, skb, 7);
+		    
 			break;
+		}
 
 		if (tcp_small_queue_check(sk, skb, 0))
+		{
+		    generate_shim_tcp_xmit_signal(sk, skb, 8);
 			break;
+		}
 
 		if (unlikely(tcp_transmit_skb(sk, skb, 1, gfp)))
-			break;
+		{
+		    generate_shim_tcp_xmit_signal(sk, skb, 9);
+		    break;
+		}
 
 repair:
 		/* Advance the send_head.  This one is sent out.
 		 * This call will increment packets_out.
 		 */
-		tcp_event_new_data_sent(sk, skb);
+		tcp_event_new_data_sent(sk, skb);		
 
 		tcp_minshall_update(tp, mss_now, skb);
 		sent_pkts += tcp_skb_pcount(skb);
+		generate_shim_tcp_xmit_signal(sk, skb, 0);
 
 		if (push_one)
 			break;
@@ -3615,6 +3676,7 @@ void __tcp_send_ack(struct sock *sk, u32 rcv_nxt)
 	skb_set_tcp_pure_ack(buff);
 
 	/* Send it off, this clears delayed acks for us. */
+	generate_shim_tcp_xmit_signal(sk, buff, 10);
 	__tcp_transmit_skb(sk, buff, 0, (__force gfp_t)0, rcv_nxt);
 }
 EXPORT_SYMBOL_GPL(__tcp_send_ack);
